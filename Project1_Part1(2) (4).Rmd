@@ -1,0 +1,612 @@
+---
+title: "Project1"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+### Introduction
+
+In today's data-driven world, job roles related to data are not only proliferating but also evolving at a rapid pace. From data scientists and data engineers to analysts and architects, the spectrum of data-related professions continues to expand. As these roles become more nuanced and specialized, determining a competitive salary becomes a challenge for both employers and potential employees. 
+
+Enter "Glassdoor's Data Jobs- Salary Predictor" - our state-of-the-art predictive model designed to address this very challenge. Leveraging vast amounts of salary data available on Glassdoor, one of the world's largest job and recruiting platforms, our model hopes to accurate salary predictions for various data-centric job roles. 
+
+In the following sections, we will delve deeper into the mechanics of our model, the data that powers it, and the actionable insights it can provide. Let's embark on this journey to demystify the world of data job salaries on Glassdoor.
+
+### Objectives  
+1. Objective 1: Build a model with the main goal to identify key relationships between the average salary and the job descriptions, such as the required skills, job titles, job locations, etc. and more importantly, is highly interpretable.
+
+2. Objective 2: Build multiple models with the goal of developing a model that can predict the best and do well on future data. 
+
+
+### Data Descriptions 
+Our data set was from Kaggle. It included 742 job postings in 2021, which scraped from Glassdoor using a Selenium-based scraper. After scrapping, the raw data set was split into 42 columns, including the original job posts. 
+
+
+## library
+```{r}
+#Libraries 
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(GGally)
+library(corrplot)
+library(caret)   
+library(naniar)
+```
+
+## Data Processing 
+### Input the dataset from Kaggle
+```{r}
+setwd("~/Desktop/MSDS/Term2_Fall2023/Stat2/Projects/Project1/R")
+data<-read.csv("data_cleaned_2021.csv")
+
+#Checking data types
+str(data)
+vis_miss(data)
+dim(data)
+```
+
+### The summary satistics of the original dataset 
+```{r}
+summary(data)
+```
+
+
+### Data cleaning - Removing some of the columns that we dont need:
+After evaluating all of the variables,we decided to drop some of them because of their existence lead to the redundancy of other variables. For example, the job title was a detailed job title from the job postings. Most of them are unique and would not provide a meaningful prediction. 
+
+The Salary Estimates is the salary ranged provided in the job listings, based on the Salary estimates, we got the upper and the slower salary and thus, find the average salary by dividing the sum of the upper and the slower salary by 2. That is why we removed all of the variables relating to the salary except the average salary. We also removed the other variables on the list for the same reason. 
+
+We moved forward with 28 variables. Following are the variable that were dropped from all data set. 
+1 - index
+2 - Job.Title (the same as job_title_sim)
+3 - Salary Estimate 
+4 - Job Description (Glassdor job posts)
+6 - Company Name
+7 - Location 
+8 - Headquarter
+10 - Founded (Year that company was founded)
+12 - Industry 
+15 - Competitors
+17 - Employer Provided 
+18 - Lower Salary
+19 - Upper Salary
+21 - Company text
+```{r}
+data <- data[ , -c(1,2,3,4,6,7,8,10,12,15,17,18,19,21)]
+```
+
+### Checking for the missing values 
+```{r}
+#Find the na values 
+columns_with_na <- names(data)[colSums(is.na(data)) > 0]
+# Display the column names with NA values
+print(columns_with_na)
+```
+There is no null values based on the initial checking point. 
+
+### Factoring the categorical variables 
+```{r}
+##Factorize the categorized variables
+data <- data %>% mutate_if(is.character, factor)
+```
+
+### Checking the missing values of the job titles and then replace na value with more meaningful variable
+```{r}
+# Replace "na" levels with "not specified" using fct_recode()
+data$job_title_sim <- fct_recode(data$job_title_sim, "other data related jobs" = "na")
+```
+
+There are 10 variables that the job_stitle_sim are "na". Upon checking the original data sets, these job postings does relate to data analysis even though their job titles do not contain "data". We decided to keep the data points but create a new level for the job title, called "other data related jobs. 
+
+## Checking and cleaning up the Sector variable
+```{r}
+
+# Replace "-1" levels with "not specified" using fct_recode()
+data$Sector <- fct_recode(data$Sector, "not specified" = "-1")
+```
+There are 10 variables that the sector are "na". We decided to keep the data points but create a new level for missing sector, called "not specified". 
+
+### Rename column titles 
+```{r}
+# Assuming 'data' is your data frame
+# Use colnames() to change the column name
+colnames(data)[colnames(data) == "Type.of.ownership"] <- "Ownership_type"
+colnames(data)[colnames(data) == "Age"] <- "Comp_history"
+colnames(data)[colnames(data) == "Avg.Salary.K."] <- "AvgSalary"
+colnames(data)[colnames(data) == "job_title_sim"] <- "Job_title"
+colnames(data)[colnames(data) == "seniority_by_title"] <- "Experience"
+```
+
+### Replace the na Experience as "no experience specified"
+```{r}
+# Replace "-1" levels with "not specified" using fct_recode()
+data$Experience <- fct_recode(data$Experience, "no experience required" = "na")
+```
+
+There are 519 job postings do not mention experiences. We assume that job does not limit applicants from a specific level of experience. So we simply replace the "na" value with "no experience required". 
+
+
+## EDA
+```{r}
+#Corrplot
+
+# Select only numeric columns from the data frame
+numeric_data <- select_if(data, is.numeric)
+
+# Compute the correlation matrix for numeric variables
+cor_matrix <- cor(numeric_data)
+
+# Customize corrplot (e.g., change color, method, etc.)
+# For more customization options, check the documentation: ?corrplot
+corrplot(cor_matrix, method = "color", tl.cex = 0.7)
+```
+
+Notably, keras, pytorch, scikit and tensor has high multi-collinearity. This is expected as keras and pytorch are the features built on top of tensor flow. Therefore, if a job require one of these skills, there are high chance that the employee will also need to be familiar with the other skills to do their jobs efficiently. To reduce the dependency between these variables, we combine it as one variable called "ML_skills". Similarly, we combined Hadoop and spark as "data_framework"; tableau and bi were combined as data_visualization.  
+
+```{r}
+# Create a new column by summing the four columns
+
+data$ML_skills <- data$keras + data$pytorch + data$scikit+ data$tensor
+
+data$vizualization <- ifelse(data$bi == 1 & data$tableau == 1, "both",
+               ifelse(data$bi == 1 & data$tableau == 0, "bi",
+               ifelse(data$bi == 0 & data$tableau == 1, "tableau", "none")))
+
+
+
+data$data_framework <- ifelse(data$spark == 1 & data$hadoop == 1, "both",
+               ifelse(data$spark == 1 & data$hadoop == 0, "spark",
+               ifelse(data$spark == 0 & data$hadoop == 1, "hadoop", "none")))
+
+```
+
+
+### Removing the following columns
+11 - spark  
+16 - pytorch
+17 - keras 
+18 - scikit 
+19 - tensorflow 
+20 - tableau 
+21 - bi 
+22 - hadoop
+
+We removed the original variables of the skills mentioned above. 
+```{r}
+# data <- data[ , -c(25,30,31,32,33,34,35,36)]
+data <- data[ , -c(11,16,17,18,19,20,21,22)]
+```
+
+
+#Checking multicollinearity 
+```{r}
+#Corrplot
+
+# Select only numeric columns from the data frame
+numeric_data <- select_if(data, is.numeric)
+
+# Compute the correlation matrix for numeric variables
+cor_matrix <- cor(numeric_data)
+
+# Customize corrplot (e.g., change color, method, etc.)
+# For more customization options, check the documentation: ?corrplot
+corrplot(cor_matrix, method = "color", tl.cex = 0.7)
+```
+
+Notice now the multicollinearity is improved. We noticed that among the numerical variables, the highest correlation is between the average salary and Python (0.324)
+
+#Display the counts of each level of the categorial varibles 
+```{r}
+for (col in names(data)) {
+  if (is.factor(data[[col]])) {
+    cat("Variable:", col, "\n")
+    cat(table(data[[col]]), "\n\n")
+  }
+}
+```
+
+#### Remove no rating datapoints 
+```{r}
+
+# Remove rows where Rating is -1 using logical indexing
+data <- data[data$AvgSalary != 15.5, ]
+
+#Replace the not Specific Company Age as Median
+# Calculate the median of comp_age excluding -1 values
+median_age <- median(data$Comp_history[data$Comp_history != -1])
+# Replace -1 with the calculated median
+data$Comp_history[data$Comp_history == -1] <- median_age
+median_age
+
+```
+Upon checking the outliers, we removed some of the outliers and missing variables. We removed the job positing from NYPD which is a data scientist full time job that only require excel skills and the average salary is 15.5K annually. Compared to the cost of living in New York an the job is full time, we believe there must be some error in this job postings. We don't think it is possible for a job like this exist with this average salary. 
+
+We also removed the job that has rating is -1 and company size is unknown, because they don't provide any information except the salary. 
+
+
+## Checking the variables 
+```{r}
+##Factorize the categorized variables
+data <- data %>% mutate_if(is.character, factor)
+```
+
+
+#### Histogram of the Average Salary 
+
+Right-skewed as expected for salary. 
+
+```{r}
+hist(data$AvgSalary, breaks = 20, col = "lightblue", xlab = "Average Salary", main = "Histogram of AvgSalary")
+
+```
+
+#### Compared the scatter plots 
+```{r}
+#Rating vs Average Salary by the Job titles 
+# Scatter Plot- Original Data
+ggplot(data, aes(x=Rating, y = AvgSalary, color= Job_title)) + 
+  geom_point() +
+  labs(title = "Scatter Plot of Rating vs. Average Salary")
+
+# Scatter Plot Linear -Log
+ggplot(data, aes(x=Rating, y = log(AvgSalary), color= Job_title)) + 
+  geom_point() +
+  labs(title = "Scatter Plot of Rating vs. Average Salary")
+
+
+
+# Company Age vs. Average Salary by the Job titles 
+# Scatter Plot - Original Data 
+ggplot(data, aes(x=Comp_history, y = AvgSalary, color=Ownership_type)) + 
+  geom_point() +
+  labs(title = "Scatter Plot of Comp_History vs. Average Salary")
+
+# Scatter Plot - Log- Linear
+ggplot(data, aes(x=log(Comp_history), y = AvgSalary, color=Ownership_type)) + 
+  geom_point() +
+  labs(title = "Scatter Plot of Comp_History vs. Average Salary")
+
+# Scatter Plot Linear-Log 
+ggplot(data, aes(x=Comp_history, y = log(AvgSalary), color=Ownership_type)) + 
+  geom_point() +
+  labs(title = "Scatter Plot of Comp_History vs. Average Salary")
+
+
+# Scatter Plot Log- log
+ggplot(data, aes(x=log(Comp_history), y = log(AvgSalary), color=Ownership_type)) + 
+  geom_point() +
+  labs(title = "Scatter Plot of Comp_History vs. Average Salary")
+
+## Ml_skills vs. Average Salary by job titles 
+ggplot(data, aes(x=ML_skills, y =AvgSalary, color= Job_title)) + geom_point()
+```
+
+We noticed that the log transformation improved the scatter plot. We moved forward with the log transformation with our initial model  
+
+#### Checking EDA of all  varibles 
+```{r}
+ggpairs(data[,c(1,2,3,5,6,7)], mapping=ggplot2::aes())
+ggpairs(data[,c(9,10,11,12,13,7)], mapping=ggplot2::aes())
+ggpairs(data[,c(14,15,16,17,18,19,7)], mapping=ggplot2::aes())
+ggpairs(data[,c(20,21,22,23,7)], mapping=ggplot2::aes())
+
+```
+
+#### Checking assumptions with the original data
+```{r}
+#Fit the model
+
+fit = lm(AvgSalary~., data = data)
+summary(fit)
+
+# QQ plot of the residuals
+qqnorm(residuals(fit))
+qqline(residuals(fit))
+
+# Diagnostic plots
+par(mfrow = c(2, 3))
+
+# Residuals vs Fitted Values
+plot(fit, which = 1)
+
+# Scale-Location (also called Spread-Location)
+plot(fit, which = 3)
+
+# Cook's distance plot
+plot(fit, which = 4)
+
+# Residuals vs Leverage
+plot(fit, which = 5)
+
+# Histogram of residuals
+hist(resid(fit))
+
+```
+Independence: We assume that each job posting on Glassdor is independent.
+
+Linearity: Even though the linearity between the salary an the predictors individual not very strong (0.324 as the highest correlation), we assume that there is a linearity between the average salary with all of the predictors remained in the model. 
+
+Normality: is a little right skewed but not a big concern here. 
+
+Homoscedasticity: We can see that the residuals do not form a random clouds in the residual vs. fitted plot. There are evidence of the non constant variances. Therefore, we will continue with the log transformation of the average salary.  
+
+#### Model1: Checking assumptions with logged average salary 
+```{r}
+#Fit the model 
+data$log_Comp_history <-log(data$Comp_history)
+logfit = lm(log(AvgSalary)~. -Comp_history, data = data)
+summary(logfit)
+confint(logfit)
+
+# QQ plot of the residuals
+qqnorm(residuals(logfit))
+qqline(residuals(logfit))
+
+# Diagnostic plots
+par(mfrow = c(2, 3))
+
+# Residuals vs Fitted Values
+plot(logfit, which = 1)
+
+# Scale-Location (also called Spread-Location)
+plot(logfit, which = 3)
+
+# Cook's distance plot
+plot(logfit, which = 4)
+
+# Residuals vs Leverage
+plot(logfit, which = 5)
+
+# Histogram of residuals
+hist(resid(logfit))
+```
+
+Independence: We assume that each job posting on Glassdor is independent. The log transformation does not affect the independence between the data points. 
+
+Linearity: Even though the linearity between the salary an the predictors individual not very strong (0.324 as the highest correlation), we assume that there is a linearity between the average salary with all of the predictors remained in the model. 
+
+Normality: The distribution of the residuals is less skewed. We assume that the normality is met. 
+
+Homoscedasticity: The log transformation also improved the inconstant variance issue. The residuals in the residual vs. fitted value plot appear to form a random cloud around 0. 
+
+There are two observations 290 and 449 appeared to have leverage higher than 1. After checking the data set to see if there is any error in the in the data collecting process, we did not see any reasons or explanations why these two observations were outliers. Their average salary in close to the mean salary, their predictor values were also not in the extreme sides. We also fitted the models without the outliers and see no much of a difference in our p-values or the coefficients. Therefore, we decided to keep these outliers and will interpret the model with the logged salary and all of the predictors in the current data set. 
+
+#### Interpretaion of the Model 1: 
+The reference for the interpretation of the coefficients: a full-time junior analyst job from a college/ university organization in Alabama. We don't know the revenue, the sector but we know the company size is about 1-50 employees. The requirement for this job is master degree and have to know both bi and tableau. 
+
+There is no enough significant evidence to suggest that the company rating or the company age is associated with the change in the median salary, keeping the other predictors constant (p-value = 0.064 and 0.81 respectively). 
+
+However, there are overwhelming evidence to suggest that some locations are associated with the change in the median salary. For example, for same job as our reference holding all of the other variables but if the job is in California, the median salary would have a 63% increase (p-value. <0.0001). A 95% confidence interval for this increase is from 35%-99% in the median salary. 
+
+Similarly, there is evidence that knowing Python is an advantage. For the sam job with everything else held constant as the reference, additional requirement of Python is associated with 8% increase in the median salary (p-value = 0.001). A 95% confidence interval of this increase is from 3% to 14%. 
+
+Also, as we all wanted to know if the data scientist is a good investment. There is strong evidence to suggest that the data scientist job title is associated with the higher pay than an analyst job even if other variables are unchanged from the reference (p-value <0.0001). It is estimated that the median salary of data scientist job title is 52% higher than median salary of a analyst job, holding the other predictors constant. A 95% confidence interval for this increase is from 41% to 63%.  
+
+#### Model1 - VIFs
+```{r}
+library(car)
+vif_values <- vif(logfit)
+# Display the VIF values
+print(vif_values)
+```
+
+
+
+#### Model 2: Foward Feature Selection   
+```{r}
+library(leaps)
+set.seed(123)
+reg.fwd=regsubsets(log(AvgSalary)~.,data=data,method="forward",nvmax=40)
+summary(reg.fwd)$adjr2
+summary(reg.fwd)$rss
+summary(reg.fwd)$bic
+par(mfrow=c(1,3))
+bics<-summary(reg.fwd)$bic
+bics
+plot(1:40,bics,type="l",ylab="BIC",xlab="# of predictors")
+index<-which(bics==min(bics))
+points(index,bics[index],col="red",pch=10)
+
+adjr2<-summary(reg.fwd)$adjr2
+plot(1:40,adjr2,type="l",ylab="Adjusted R-squared",xlab="# of predictors")
+index<-which(adjr2==max(adjr2))
+points(index,adjr2[index],col="red",pch=10)
+
+rss<-summary(reg.fwd)$rss
+plot(1:40,rss,type="l",ylab="train RSS",xlab="# of predictors")
+index<-which(rss==min(rss))
+points(index,rss[index],col="red",pch=10)
+```
+```{r}
+coef(reg.fwd,20)
+```
+
+
+Notably, the forward feature selection model based on Bic has fewer predictors than the one based on the adjusted r squared or rss. Among the 20 predictors, some of them are statistical significant in the the model 2, including but not limited to Python, Job.LocationCA, and Job_titledatascientist. However, there are also predictors appeared to be statistically insignificant in our previous model but now enter the feature selection model, such as Experiencesr or SectorBiotech & Pharmaceuticals. We found this is very interesting as we know that in reality, people from senior level are paid higher than the junior level. This is evidence that we can not always trust the results right away but instead using our domain knowledge to find the appropriate predictors for our model.
+
+
+We then move forward with the new subset of predictors which our group believe are practically or statistically significant to the salary. In. model 3, we will implement the glmnet technique and CV to collect the RMSE for the model comparison in objective 2. 
+
+
+#### Model 3: glmnet + no interaction term + log transformation 
+```{r}
+#glmnet - Regression Coefficients
+library(caret)
+set.seed(123)
+fitControl<-trainControl(method="repeatedcv",number=10,repeats=10) 
+glmnet.logfit1<-train(log(AvgSalary)~Job_title + Hourly + Job.Location + Python + 
+                  sas + mongo + Experience + Degree,
+               data=data,
+               method="glmnet",
+               trControl=fitControl
+               )
+opt.pen1<-glmnet.logfit1$finalModel$lambdaOpt 
+coef(glmnet.logfit1$finalModel,opt.pen1)
+glmnet.logfit1
+plot(glmnet.logfit1)
+```
+The best RMSE from model 3 is 0.2490 which is about 28% than the actual salary. Notice that the alpha is 0.55, and the lambda or the penalty term is 0.003. We will check for mother EDA to consider the appropriate interation term and ad more complexity to our model. 
+
+##### More EDA 
+```{r}
+ggplot(data=data,aes(x=Job.Location,y=log(AvgSalary),colour=Job_title))+geom_boxplot()
+```
+
+It is hard to say whether the job titles have different slope in this boxplot. Some states we barely have any formation, like Kentucky or South Carolina. 
+
+```{r}
+ggplot(data=data,aes(x=Job_title,y=log(AvgSalary),colour=Experience))+geom_boxplot()
+```
+
+However, we believe there is some interaction between the job titles and the experience levels. In some job, there is a significant difference in salary between the the jobs required the senior experience level and the jobs do not require a specific experience level, like data scientist and analyst. Whereas, with the jobs that have need some type of data skills, the median pay between senior experience required and no experience required are almost the same.  
+
+```{r}
+ggplot(data=data,aes(x=Job_title,y=log(AvgSalary),colour=Degree))+geom_boxplot()
+```
+
+
+```{r}
+
+ggplot(data=data,aes(x=Experience,y=log(AvgSalary),colour=Degree))+geom_boxplot()
+```
+Similarly, we believe that there may be an interaction between the experience level and the degree required. For the jobs that need the senior experience level, there is not much of a difference in the median salary if the jobs require different level of education. It is not the case for the jobs that do not require a specific level of seniority, as the higher degree are evidently associated with the higher pay. 
+
+
+```{r}
+
+ggplot(data=data,aes(x=Ownership_type,y=log(AvgSalary),colour=Degree))+geom_boxplot()
+```
+After checking a few more additional EDA, we want to add the complexity in our models for the prediction purpose. 
+
+### Objective 2: Add more complexity in our previous model- Prediction Models 
+
+Based on the previous EDA and models, we will fit the model 4 with the same subset of predictors of model 3 with the additional interactions between Experience, Degree, and Job titles. 
+
+#### Model 4: Glmnet + Interaction + log transformation 
+```{r}
+#glmnet - Regression Coefficients
+library(caret)
+set.seed(123)
+fitControl<-trainControl(method="repeatedcv",number=10,repeats=10) 
+glmnet.logfit2<-train(log(AvgSalary)~ Hourly + Job.Location + Python + Sector + Revenue + sas + mongo + Job_title * Experience *Degree,
+               data=data,
+               method="glmnet",
+               trControl=fitControl
+               )
+opt.pen2<-glmnet.logfit2$finalModel$lambdaOpt 
+coef(glmnet.logfit2$finalModel,opt.pen2)
+glmnet.logfit2
+plot(glmnet.logfit2)
+```
+
+The best RMSE in the model 4 is 0.2416, which is about +/- 27% from the actual median salary. Notably the alpha is 1, which is more Lasso than gmnet approach. The lamnda or penalty term is the same as the model 3. The RMSE does not improve much in our opinion even with the new interaction terms. 
+
+```{r}
+library(rgl)
+knitr::knit_hooks$set(webgl=hook_webgl)
+plot(glmnet.logfit2$finalModel, xvar = "lambda", label = TRUE)
+```
+
+As we can see in the plot above, there are many coefficients are forced to be 0 when increasing the penalty term (alpha). 
+
+#### Model 5: Nonparametric model: knn + log transformation  
+
+```{r}
+library(caret)
+set.seed(1234)
+fitControl<-trainControl(method="repeatedcv",number=10,repeats=1) 
+knn.fit1<-train(log(AvgSalary)~Job_title + Hourly + Job.Location + Python + Ownership_type +
+                  sas + mongo + Experience + Degree,
+               data=data,
+               method="knn",
+               trControl=fitControl
+               )
+opt.pen<-knn.fit1$finalModel$lambdaOpt 
+knn.fit1
+```
+We also tried the nonparametric approach to see if they improved the salary prediction. Unfortunately, we are not able to try the tree models as the maximum amount of level in a categorical variables are 32. There are 37 different job locations in our data set. We will then use knn test to build the next two models. The difference between the model 5 and 6 is the addition of the interaction terms between the Job titles, the Experience and the degree. 
+
+#Model 6: KNN Fit
+```{r ,echo=T}
+library(caret)
+set.seed(1234)
+fitControl<-trainControl(method="repeatedcv",number=10,repeats=1) 
+knn.fit2<-train(log(AvgSalary)~ Hourly + Job.Location + Python + Ownership_type +
+                  sas + mongo + Job_title* Experience * Degree,
+               data=data,
+               method="knn",
+               trControl=fitControl
+               )
+opt.pen2<-knn.fit2$finalModel$lambdaOpt 
+knn.fit2
+```
+Both model 5 and 6 gave similar results. Even though the addition of the interaction term brought down the RMSE, the difference is not significant( RMSE = 0.270 and 0.267 for model 5 nd 6 respectively). The model 4 with the glmnet, interaction terms still has the lowest RMSE of all. 
+
+#Initialize an randomly sampled list for prediction on AvgSalary, use each model to predict salary values
+```{r}
+# Set seed 
+set.seed(123)
+
+# Number of samples to generate
+num_samples <- 1  #We can adjust as needed
+
+# Initialize an empty data frame for dummy data with the same columns as the original data
+prediction_data <- data.frame(matrix(NA, nrow = num_samples, ncol = ncol(data)))
+colnames(prediction_data) <- colnames(data)
+
+# Loop through each column to generate random values (pulled from data)
+for (col_name in names(data)) {
+  if (col_name != "AvgSalary") {
+    prediction_data[[col_name]] <- sample(data[[col_name]], num_samples, replace = TRUE)
+  } else if (col_name == "AvgSalary") {
+    # Set AvgSalary column to NULL (empty) for prediction
+    prediction_data[[col_name]] <- rep(NA, num_samples)
+  }
+}
+head(prediction_data)
+
+#Predict using GLMnet Model 3
+prediction_data$Model3 <- predict(glmnet.logfit1, newdata = prediction_data)
+prediction_data$Model3 <- exp(prediction_data$Model3)
+
+#Predict using GLMnet Model 4
+prediction_data$Model4 <- predict(glmnet.logfit2, newdata = prediction_data)
+prediction_data$Model4 <- exp(prediction_data$Model4)
+
+
+# Predict AvgSalary on the prediction_data using the knn.fit model
+prediction_data$Model5 <- predict(knn.fit1, newdata = prediction_data)
+prediction_data$Model5<- exp(prediction_data$Model5)
+
+
+# Predict AvgSalary on the prediction_data using the knn.fit model
+prediction_data$Model6 <- predict(knn.fit2, newdata = prediction_data)
+prediction_data$Model6<- exp(prediction_data$Model6)
+
+cat("Model 3 GLMNET Logged model without interaction,predicted an average salary of:", head(prediction_data$Model3), "\n")
+cat("Model 4 GLMNET Logged model with interaction, predicted an average salary of:", 
+head(prediction_data$Model4), "\n")
+cat("Model 5 KNN model predicted an average salary of:", head(prediction_data$Model5), "\n")
+cat("Model 6 KNN model predicted an average salary of:", head(prediction_data$Model6), "\n")
+```
+We also created an example with random values of the prediction. Notably, the model 4 with the best RMSE gave us the lowest salary. 
+
+#### Conclusion 
+
+For the objective 1, there are a some predictors are both practically and statistically significant, such as job location, job titles and hourly. There are some predictors we thought that may matter to the average salary like the company size and the advance ML_skills, however, appeared to be not statistically significant. 
+
+After a few attempt with multiple technique, including adding interaction terms and nonparametric model, we still did not have a prediction as good as we hope for. Out of 4 different model with the increased complexity, the glmnet model with interaction terms has the lowest RMSE.
+
+Given that the data set including the job postings scraped from Glassdoor, there is not much information how they were scraped or whether the data were collected randomly. There are some association between the predictors and the change in the median salary, including but not limited to the job locations, job title, Python requirement, etc. We assume that the results may be extended to the other data job postings on Glassdoor in 2021. However, if we want to extend the result to any data jobs, more job listings must be collected from different job sites, from other states, and so on. 
+
+For the future endeavors, we want to dig in more the methodology how the job listings were scraped from Glassdoor. We also want to address the weak correlation between the salary and the predictors. Maybe more the we need to collect better predictions that have a stronger relation with the salary. 
+
+
+
+
